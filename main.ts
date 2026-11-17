@@ -6,7 +6,12 @@
 // high/low range and buys only when the close sits in the bottom 20% of that
 // range, and sells when it reaches the top 20%. A 1.5% stop-loss from the
 // entry close caps the damage if a "dip" turns out to be a real downtrend,
-// with a 60-bar cooldown before re-entering after a stop-out.
+// with a 60-bar cooldown before re-entering after a stop-out. Entries also
+// require the trailing range to be wide enough to pay for the round trip:
+// a buy captures at most 60% of the span (bottom 20% to top 20%), while a
+// full-size round trip costs roughly 0.34% of price (4 bps fee each side
+// plus slippage/impact), so a span under 0.5% of price cannot profit and
+// the bot sits out flat stretches instead of churning fees on them.
 //
 // Backtested on the dev window (Python replica of the fill model, then
 // confirmed with the kit's grade-local): net PnL about +$21, 5 trades,
@@ -36,6 +41,10 @@ const STOP_DEN = 1000n;
 const STOP_COOLDOWN_BARS = 60;
 /** Max slippage vs the latest close, in bps (fills move ~13 bps on a full-size trade). */
 const MAX_SLIPPAGE_BPS = 100;
+/** Minimum trailing range, as a fraction of price, for a buy to be worth
+ *  the round trip: span < 0.5% of close cannot cover ~0.34% of costs. */
+const MIN_SPAN_NUM = 1n;
+const MIN_SPAN_DEN = 200n; // 0.005
 
 /** Closes, highs and lows seen so far, in price units (bigint, price_scale 8). */
 const closes: bigint[] = [];
@@ -84,9 +93,11 @@ await runBars({
     const fromLo = close - range.lo;
 
     if (!holding) {
-      // Buy the bottom of the range: fromLo / span < 0.20, after any stop cooldown.
+      // Buy the bottom of the range: fromLo / span < 0.20, after any stop cooldown,
+      // and only when the range is wide enough to pay for the round trip.
       if (
         fromLo * BUY_FRAC_DEN < span * BUY_FRAC_NUM &&
+        span * MIN_SPAN_DEN >= close * MIN_SPAN_NUM &&
         state.seq - lastStopSeq >= STOP_COOLDOWN_BARS &&
         state.cash > 0n
       ) {
